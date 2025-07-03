@@ -8,7 +8,7 @@ import { AuthProvider } from "@/contexts/auth-context"
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "Vercel Chat App",
+  title: "Chat App",
   description: "A modern chat application with admin and user roles",
     generator: 'v0.dev'
 }
