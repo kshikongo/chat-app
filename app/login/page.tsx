@@ -160,7 +160,7 @@ export default function LoginPage() {
 
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">Welcome to Vercel Chat</CardTitle>
+          <CardTitle className="text-2xl">Text your friends</CardTitle>
           <CardDescription>Sign in to your account or create a new one</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
