@@ -4,7 +4,12 @@ import { useAuth } from "@/contexts/auth-context"
 import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 import { collection, query, where, onSnapshot, addDoc } from "firebase/firestore"
-import { db } from "@/lib/firebase"
+import { db, auth } from "@/lib/firebase"
+import {  updateProfile, 
+  updateEmail, 
+  updatePassword, 
+  reauthenticateWithCredential, 
+  EmailAuthProvider } from "firebase/auth"
 import type { User, Conversation } from "@/lib/types"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -25,10 +30,15 @@ export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<"chats" | "general-users" | "admins" | "settings">("general-users")
   const [startingChat, setStartingChat] = useState(false)
 
+  // New state for updating profile
+  const [displayName, setDisplayName] = useState(user?.displayName || "")
+  const [email, setEmail] = useState(user?.email || "")
+  const [password, setPassword] = useState("")
+  const [updating, setUpdating] = useState(false)
+
   const startConversation = async (otherUserId: string) => {
     setStartingChat(true)
     try {
-      // Check if conversation already exists
       const existingConversation = conversations.find(
         (conv) => conv.participants.includes(otherUserId) && conv.participants.includes(user.id),
       )
@@ -37,7 +47,6 @@ export default function DashboardPage() {
         setSelectedConversation(existingConversation.id)
         setActiveTab("chats")
       } else {
-        // Create new conversation
         const conversationRef = await addDoc(collection(db, "Conversations"), {
           participants: [user.id, otherUserId],
           lastMessage: "",
@@ -58,6 +67,40 @@ export default function DashboardPage() {
     }
   }
 
+ const handleUpdateProfile = async () => {
+  const currentUser = auth.currentUser
+  if (!currentUser) return alert("No authenticated user found.")
+
+  setUpdating(true)
+  try {
+    // 🔑 Only reauthenticate if email or password is being changed
+    if ((email !== currentUser.email) || password.trim()) {
+      const reauthPassword = prompt("Please confirm your current password")
+      if (!reauthPassword) throw new Error("Reauthentication required.")
+
+      const credential = EmailAuthProvider.credential(currentUser.email!, reauthPassword)
+      await reauthenticateWithCredential(currentUser, credential)
+    }
+
+    if (displayName !== currentUser.displayName) {
+      await updateProfile(currentUser, { displayName })
+    }
+    if (email !== currentUser.email) {
+      await updateEmail(currentUser, email)
+    }
+    if (password.trim()) {
+      await updatePassword(currentUser, password)
+    }
+
+    alert("Profile updated successfully!")
+  } catch (err: any) {
+    console.error("Error updating profile:", err)
+    alert(err.message)
+  } finally {
+    setUpdating(false)
+  }
+}
+
   useEffect(() => {
     if (!loading && (!user || user.role !== "general")) {
       router.push("/login")
@@ -67,9 +110,7 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!user) return
 
-    // Listen to conversations
     const conversationsQuery = query(collection(db, "Conversations"), where("participants", "array-contains", user.id))
-
     const unsubscribeConversations = onSnapshot(conversationsQuery, (snapshot) => {
       const conversationData = snapshot.docs.map((doc) => ({
         id: doc.id,
@@ -78,7 +119,6 @@ export default function DashboardPage() {
       setConversations(conversationData)
     })
 
-    // Listen to General users (excluding current user)
     const generalQuery = query(collection(db, "General"))
     const unsubscribeGeneral = onSnapshot(generalQuery, (snapshot) => {
       const users = snapshot.docs
@@ -91,7 +131,6 @@ export default function DashboardPage() {
       setGeneralUsers(users)
     })
 
-    // Listen to Admin users
     const adminsQuery = query(collection(db, "Admins"))
     const unsubscribeAdmins = onSnapshot(adminsQuery, (snapshot) => {
       const users = snapshot.docs.map((doc) => ({
@@ -176,6 +215,7 @@ export default function DashboardPage() {
                   <MessageCircle className="h-4 w-4 mr-2" />
                   My Chats ({conversations.length})
                 </Button>
+              
                 <Button
                   variant={activeTab === "admins" ? "default" : "ghost"}
                   className="w-full justify-start"
@@ -307,7 +347,6 @@ export default function DashboardPage() {
                       )}
                     </CardContent>
                   </Card>
-
                   {selectedConversation && <ChatInterface conversationId={selectedConversation} currentUser={user} />}
                 </div>
               </TabsContent>
@@ -370,25 +409,37 @@ export default function DashboardPage() {
                       <label className="block text-sm font-medium mb-2">Display Name</label>
                       <input
                         type="text"
-                        value={user.displayName}
+                        value={displayName}
+                        onChange={(e) => setDisplayName(e.target.value)}
                         className="w-full p-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
-                        readOnly
                       />
                     </div>
                     <div>
                       <label className="block text-sm font-medium mb-2">Email</label>
                       <input
                         type="email"
-                        value={user.email}
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
                         className="w-full p-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
-                        readOnly
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-2">New Password</label>
+                      <input
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="Leave blank to keep current password"
+                        className="w-full p-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
                       />
                     </div>
                     <div>
                       <label className="block text-sm font-medium mb-2">Role</label>
                       <Badge variant="secondary">{user.role}</Badge>
                     </div>
-                    <Button className="w-full">Update Profile</Button>
+                    <Button className="w-full" onClick={handleUpdateProfile} disabled={updating}>
+                      {updating ? "Updating..." : "Update Profile"}
+                    </Button>
                   </CardContent>
                 </Card>
               </TabsContent>
