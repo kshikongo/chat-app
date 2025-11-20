@@ -32,3 +32,9 @@ export interface AdminStats {
   totalMessages: number
   activeUsers: number
 }
+
+export interface Notes{
+  body: string
+  dateCreated: Date
+  userID: string
+}

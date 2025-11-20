@@ -3,46 +3,88 @@
 import { useAuth } from "@/contexts/auth-context"
 import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
-import { collection, query, where, onSnapshot, addDoc } from "firebase/firestore"
-import { db, auth } from "@/lib/firebase"
-import {  updateProfile, 
-  updateEmail, 
-  updatePassword, 
-  reauthenticateWithCredential, 
-  EmailAuthProvider } from "firebase/auth"
-import type { User, Conversation } from "@/lib/types"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { motion, AnimatePresence } from "framer-motion"
+import { LogOut, Menu, Users, MessageCircle, UserPlus, Settings } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
-import { Tabs, TabsContent } from "@/components/ui/tabs"
-import { MessageCircle, Settings, Users, LogOut, UserPlus } from "lucide-react"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ChatInterface } from "@/components/chat-interface"
+
+import { db, auth } from "@/lib/firebase"
+import { collection, query, where, onSnapshot, addDoc } from "firebase/firestore"
+import {
+  updateProfile,
+  updateEmail,
+  updatePassword,
+  reauthenticateWithCredential,
+  EmailAuthProvider,
+} from "firebase/auth"
+import type { User, Conversation } from "@/lib/types"
 
 export default function DashboardPage() {
   const { user, loading, logout } = useAuth()
   const router = useRouter()
+
+  // Sidebar / tabs
+  const [activeTab, setActiveTab] = useState<"general-users" | "chats" | "admins" | "settings" | null>(null)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  // Chat + users
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [generalUsers, setGeneralUsers] = useState<User[]>([])
   const [adminUsers, setAdminUsers] = useState<User[]>([])
   const [selectedConversation, setSelectedConversation] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<"chats" | "general-users" | "admins" | "settings">("general-users")
-  const [startingChat, setStartingChat] = useState(false)
 
-  // New state for updating profile
+  // Profile
   const [displayName, setDisplayName] = useState(user?.displayName || "")
   const [email, setEmail] = useState(user?.email || "")
   const [password, setPassword] = useState("")
   const [updating, setUpdating] = useState(false)
 
+  useEffect(() => {
+    if (!loading && (!user || user.role !== "general")) {
+      router.push("/login")
+    }
+  }, [user, loading, router])
+
+  // Firestore listeners
+  useEffect(() => {
+    if (!user) return
+
+    const conversationsQuery = query(collection(db, "Conversations"), where("participants", "array-contains", user.id))
+    const unsubscribeConversations = onSnapshot(conversationsQuery, (snapshot) => {
+      const conversationData = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })) as Conversation[]
+      setConversations(conversationData)
+    })
+
+    const generalQuery = query(collection(db, "General"))
+    const unsubscribeGeneral = onSnapshot(generalQuery, (snapshot) => {
+      setGeneralUsers(
+        snapshot.docs
+          .map((doc) => ({ id: doc.id, ...doc.data(), role: "general" }))
+          .filter((u) => u.id !== user.id) as User[],
+      )
+    })
+
+    const adminsQuery = query(collection(db, "Admins"))
+    const unsubscribeAdmins = onSnapshot(adminsQuery, (snapshot) => {
+      setAdminUsers(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data(), role: "admin" })) as User[])
+    })
+
+    return () => {
+      unsubscribeConversations()
+      unsubscribeGeneral()
+      unsubscribeAdmins()
+    }
+  }, [user])
+
+  // Start new conversation
   const startConversation = async (otherUserId: string) => {
-    setStartingChat(true)
     try {
       const existingConversation = conversations.find(
         (conv) => conv.participants.includes(otherUserId) && conv.participants.includes(user.id),
       )
-
       if (existingConversation) {
         setSelectedConversation(existingConversation.id)
         setActiveTab("chats")
@@ -56,97 +98,47 @@ export default function DashboardPage() {
             [otherUserId]: 0,
           },
         })
-
         setSelectedConversation(conversationRef.id)
         setActiveTab("chats")
       }
-    } catch (error) {
-      console.error("Error starting conversation:", error)
+    } catch (err) {
+      console.error("Error starting conversation:", err)
+    }
+  }
+
+  // Profile update
+  const handleUpdateProfile = async () => {
+    const currentUser = auth.currentUser
+    if (!currentUser) return alert("No authenticated user found.")
+
+    setUpdating(true)
+    try {
+      if ((email !== currentUser.email) || password.trim()) {
+        const reauthPassword = prompt("Please confirm your current password")
+        if (!reauthPassword) throw new Error("Reauthentication required.")
+
+        const credential = EmailAuthProvider.credential(currentUser.email!, reauthPassword)
+        await reauthenticateWithCredential(currentUser, credential)
+      }
+
+      if (displayName !== currentUser.displayName) {
+        await updateProfile(currentUser, { displayName })
+      }
+      if (email !== currentUser.email) {
+        await updateEmail(currentUser, email)
+      }
+      if (password.trim()) {
+        await updatePassword(currentUser, password)
+      }
+
+      alert("Profile updated successfully!")
+    } catch (err: any) {
+      console.error("Error updating profile:", err)
+      alert(err.message)
     } finally {
-      setStartingChat(false)
+      setUpdating(false)
     }
   }
-
- const handleUpdateProfile = async () => {
-  const currentUser = auth.currentUser
-  if (!currentUser) return alert("No authenticated user found.")
-
-  setUpdating(true)
-  try {
-    // 🔑 Only reauthenticate if email or password is being changed
-    if ((email !== currentUser.email) || password.trim()) {
-      const reauthPassword = prompt("Please confirm your current password")
-      if (!reauthPassword) throw new Error("Reauthentication required.")
-
-      const credential = EmailAuthProvider.credential(currentUser.email!, reauthPassword)
-      await reauthenticateWithCredential(currentUser, credential)
-    }
-
-    if (displayName !== currentUser.displayName) {
-      await updateProfile(currentUser, { displayName })
-    }
-    if (email !== currentUser.email) {
-      await updateEmail(currentUser, email)
-    }
-    if (password.trim()) {
-      await updatePassword(currentUser, password)
-    }
-
-    alert("Profile updated successfully!")
-  } catch (err: any) {
-    console.error("Error updating profile:", err)
-    alert(err.message)
-  } finally {
-    setUpdating(false)
-  }
-}
-
-  useEffect(() => {
-    if (!loading && (!user || user.role !== "general")) {
-      router.push("/login")
-    }
-  }, [user, loading, router])
-
-  useEffect(() => {
-    if (!user) return
-
-    const conversationsQuery = query(collection(db, "Conversations"), where("participants", "array-contains", user.id))
-    const unsubscribeConversations = onSnapshot(conversationsQuery, (snapshot) => {
-      const conversationData = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      })) as Conversation[]
-      setConversations(conversationData)
-    })
-
-    const generalQuery = query(collection(db, "General"))
-    const unsubscribeGeneral = onSnapshot(generalQuery, (snapshot) => {
-      const users = snapshot.docs
-        .map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-          role: "general",
-        }))
-        .filter((u) => u.id !== user.id) as User[]
-      setGeneralUsers(users)
-    })
-
-    const adminsQuery = query(collection(db, "Admins"))
-    const unsubscribeAdmins = onSnapshot(adminsQuery, (snapshot) => {
-      const users = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-        role: "admin",
-      })) as User[]
-      setAdminUsers(users)
-    })
-
-    return () => {
-      unsubscribeConversations()
-      unsubscribeGeneral()
-      unsubscribeAdmins()
-    }
-  }, [user])
 
   if (loading) {
     return (
@@ -156,297 +148,205 @@ export default function DashboardPage() {
     )
   }
 
-  if (!user || user.role !== "general") {
-    return null
-  }
+  if (!user || user.role !== "general") return null
 
   const allUsers = [...generalUsers, ...adminUsers]
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 relative">
+      {/* HEADER */}
       <header className="bg-white dark:bg-gray-800 shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center py-4">
+            <Button variant="ghost" onClick={() => setSidebarOpen(true)}>
+              <Menu className="h-6 w-6" />
+            </Button>
             <div className="flex items-center space-x-4">
-              <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Dashboard</h1>
-              <Badge variant="secondary">General User</Badge>
-            </div>
-            <div className="flex items-center space-x-4">
-              <div className="text-sm text-gray-600 dark:text-gray-300">
-                Welcome, <span className="font-medium">{user.displayName}</span>
-              </div>
+              <span className="text-sm text-gray-600 dark:text-gray-300">
+               <span className="font-medium">{user.displayName}</span>
+              </span>
               <ThemeToggle />
               <Button variant="outline" onClick={logout}>
-                <LogOut className="h-4 w-4 mr-2" />
-                Logout
+                <LogOut className="h-4 w-4 mr-2" /> Logout
               </Button>
             </div>
           </div>
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-          {/* Sidebar */}
-          <div className="lg:col-span-1">
+      {/* SIDEBAR DRAWER */}
+      <AnimatePresence>
+        {sidebarOpen && (
+          <>
+            <motion.div
+              className="fixed inset-0 bg-black bg-opacity-50 z-40"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSidebarOpen(false)}
+            />
+            <motion.div
+              className="fixed top-0 left-0 w-64 h-full bg-white dark:bg-gray-800 shadow-lg z-50 p-4"
+              initial={{ x: -300 }}
+              animate={{ x: 0 }}
+              exit={{ x: -300 }}
+            >
+              <h2 className="text-lg font-bold mb-4">Menu</h2>
+              <nav className="space-y-2">
+                {["general-users", "chats", "admins", "settings"].map((tab) => (
+                  <Button
+                    key={tab}
+                    variant={activeTab === tab ? "default" : "ghost"}
+                    className="w-full justify-start"
+                    onClick={() => {
+                      setActiveTab(tab as any)
+                      setSidebarOpen(false)
+                    }}
+                  >
+                    {tab === "general-users" && <Users className="h-4 w-4 mr-2" />}
+                    {tab === "chats" && <MessageCircle className="h-4 w-4 mr-2" />}
+                    {tab === "admins" && <UserPlus className="h-4 w-4 mr-2" />}
+                    {tab === "settings" && <Settings className="h-4 w-4 mr-2" />}
+                    {tab.replace("-", " ").toUpperCase()}
+                  </Button>
+                ))}
+              </nav>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* MAIN CONTENT */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {activeTab === null && <p className="text-gray-500">👈 Open the menu to get started</p>}
+
+        {activeTab === "general-users" && (
+          <Card>
+            <CardHeader>
+              <CardTitle>General Users</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {generalUsers.length === 0 ? (
+                <p>No general users found.</p>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {generalUsers.map((u) => (
+                    <Card key={u.id} className="p-4 flex flex-col items-center">
+                      <p className="font-medium">{u.displayName}</p>
+                      <p className="text-sm text-gray-500">{u.email}</p>
+                      <Button onClick={() => startConversation(u.id)} className="mt-2">
+                        <MessageCircle className="h-4 w-4 mr-2" /> Start Chat
+                      </Button>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {activeTab === "chats" && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center space-x-2">
-                  <Avatar>
-                    <AvatarFallback>{user.displayName?.charAt(0).toUpperCase() || "U"}</AvatarFallback>
-                  </Avatar>
-                  <span className="truncate">{user.displayName}</span>
-                </CardTitle>
+                <CardTitle>My Conversations</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-2">
-                <Button
-                  variant={activeTab === "general-users" ? "default" : "ghost"}
-                  className="w-full justify-start"
-                  onClick={() => setActiveTab("general-users")}
-                >
-                  <Users className="h-4 w-4 mr-2" />
-                  General Users ({generalUsers.length})
-                </Button>
-                <Button
-                  variant={activeTab === "chats" ? "default" : "ghost"}
-                  className="w-full justify-start"
-                  onClick={() => setActiveTab("chats")}
-                >
-                  <MessageCircle className="h-4 w-4 mr-2" />
-                  My Chats ({conversations.length})
-                </Button>
-              
-                <Button
-                  variant={activeTab === "admins" ? "default" : "ghost"}
-                  className="w-full justify-start"
-                  onClick={() => setActiveTab("admins")}
-                >
-                  <UserPlus className="h-4 w-4 mr-2" />
-                  Admins ({adminUsers.length})
-                </Button>
-                <Button
-                  variant={activeTab === "settings" ? "default" : "ghost"}
-                  className="w-full justify-start"
-                  onClick={() => setActiveTab("settings")}
-                >
-                  <Settings className="h-4 w-4 mr-2" />
-                  Settings
-                </Button>
+              <CardContent>
+                {conversations.length === 0 ? (
+                  <p>No conversations yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {conversations.map((conv) => {
+                      const otherId = conv.participants.find((id: string) => id !== user.id)
+                      const otherUser = allUsers.find((u) => u.id === otherId)
+                      return (
+                        <Button
+                          key={conv.id}
+                          variant={selectedConversation === conv.id ? "default" : "ghost"}
+                          className="w-full justify-start"
+                          onClick={() => setSelectedConversation(conv.id)}
+                        >
+                          <span>{otherUser?.displayName || "Unknown User"}</span>
+                        </Button>
+                      )
+                    })}
+                  </div>
+                )}
               </CardContent>
             </Card>
+            {selectedConversation && <ChatInterface conversationId={selectedConversation} currentUser={user} />}
           </div>
+        )}
 
-          {/* Main Content */}
-          <div className="lg:col-span-3">
-            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as any)}>
-              {/* General Users Tab */}
-              <TabsContent value="general-users">
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center space-x-2">
-                      <Users className="h-5 w-5" />
-                      <span>General Users - Start a Chat</span>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    {generalUsers.length === 0 ? (
-                      <div className="text-center py-12">
-                        <Users className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                        <p className="text-gray-500 text-lg">No other general users found</p>
-                        <p className="text-gray-400 text-sm">Be the first to invite others!</p>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {generalUsers.map((otherUser) => (
-                          <Card key={otherUser.id} className="hover:shadow-md transition-shadow">
-                            <CardContent className="p-4">
-                              <div className="flex flex-col items-center text-center space-y-3">
-                                <Avatar className="h-16 w-16">
-                                  <AvatarFallback className="text-lg font-semibold">
-                                    {otherUser.displayName?.charAt(0).toUpperCase() || "U"}
-                                  </AvatarFallback>
-                                </Avatar>
-                                <div>
-                                  <p className="font-medium text-lg">{otherUser.displayName}</p>
-                                  <p className="text-sm text-gray-500">{otherUser.email}</p>
-                                  <Badge variant="secondary" className="mt-1">
-                                    General User
-                                  </Badge>
-                                </div>
-                                <Button
-                                  onClick={() => startConversation(otherUser.id)}
-                                  disabled={startingChat}
-                                  className="w-full"
-                                >
-                                  <MessageCircle className="h-4 w-4 mr-2" />
-                                  {startingChat ? "Starting..." : "Start Chat"}
-                                </Button>
-                              </div>
-                            </CardContent>
-                          </Card>
-                        ))}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              </TabsContent>
-
-              {/* Chats Tab */}
-              <TabsContent value="chats">
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>My Conversations</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      {conversations.length === 0 ? (
-                        <div className="text-center py-8">
-                          <MessageCircle className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                          <p className="text-gray-500">No conversations yet</p>
-                          <p className="text-gray-400 text-sm">Start chatting with other users!</p>
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          {conversations.map((conversation) => {
-                            // Find other participant
-                            const otherParticipantId = conversation.participants.find((id: string) => id !== user.id)
-                            const otherUser = allUsers.find((u) => u.id === otherParticipantId)
-
-                            return (
-                              <Button
-                                key={conversation.id}
-                                variant={selectedConversation === conversation.id ? "default" : "ghost"}
-                                className="w-full justify-start p-3 h-auto"
-                                onClick={() => setSelectedConversation(conversation.id)}
-                              >
-                                <div className="flex items-center space-x-3 w-full">
-                                  <Avatar className="h-10 w-10">
-                                    <AvatarFallback>
-                                      {otherUser?.displayName?.charAt(0).toUpperCase() || "U"}
-                                    </AvatarFallback>
-                                  </Avatar>
-                                  <div className="flex-1 text-left">
-                                    <p className="font-medium">{otherUser?.displayName || "Unknown User"}</p>
-                                    {conversation.lastMessage && (
-                                      <p className="text-sm text-gray-500 truncate">{conversation.lastMessage}</p>
-                                    )}
-                                  </div>
-                                  {otherUser && (
-                                    <Badge
-                                      variant={otherUser.role === "admin" ? "default" : "secondary"}
-                                      className="text-xs"
-                                    >
-                                      {otherUser.role}
-                                    </Badge>
-                                  )}
-                                </div>
-                              </Button>
-                            )
-                          })}
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                  {selectedConversation && <ChatInterface conversationId={selectedConversation} currentUser={user} />}
+        {activeTab === "admins" && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Admins</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {adminUsers.length === 0 ? (
+                <p>No admins found.</p>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {adminUsers.map((admin) => (
+                    <Card key={admin.id} className="p-4 flex flex-col">
+                      <p className="font-medium">{admin.displayName}</p>
+                      <p className="text-sm text-gray-500">{admin.email}</p>
+                      <Badge variant="default" className="mt-1">
+                        Administrator
+                      </Badge>
+                      <Button onClick={() => startConversation(admin.id)} className="mt-2">
+                        <MessageCircle className="h-4 w-4 mr-2" /> Chat
+                      </Button>
+                    </Card>
+                  ))}
                 </div>
-              </TabsContent>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
-              {/* Admins Tab */}
-              <TabsContent value="admins">
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center space-x-2">
-                      <UserPlus className="h-5 w-5" />
-                      <span>Contact Administrators</span>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    {adminUsers.length === 0 ? (
-                      <div className="text-center py-8">
-                        <UserPlus className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                        <p className="text-gray-500">No administrators found</p>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {adminUsers.map((admin) => (
-                          <Card key={admin.id} className="hover:shadow-md transition-shadow">
-                            <CardContent className="p-4">
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center space-x-3">
-                                  <Avatar>
-                                    <AvatarFallback>{admin.displayName?.charAt(0).toUpperCase() || "A"}</AvatarFallback>
-                                  </Avatar>
-                                  <div>
-                                    <p className="font-medium">{admin.displayName}</p>
-                                    <p className="text-sm text-gray-500">{admin.email}</p>
-                                    <Badge variant="default" className="mt-1">
-                                      Administrator
-                                    </Badge>
-                                  </div>
-                                </div>
-                                <Button size="sm" onClick={() => startConversation(admin.id)} disabled={startingChat}>
-                                  <MessageCircle className="h-4 w-4 mr-1" />
-                                  Chat
-                                </Button>
-                              </div>
-                            </CardContent>
-                          </Card>
-                        ))}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              </TabsContent>
-
-              {/* Settings Tab */}
-              <TabsContent value="settings">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Account Settings</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium mb-2">Display Name</label>
-                      <input
-                        type="text"
-                        value={displayName}
-                        onChange={(e) => setDisplayName(e.target.value)}
-                        className="w-full p-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium mb-2">Email</label>
-                      <input
-                        type="email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        className="w-full p-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium mb-2">New Password</label>
-                      <input
-                        type="password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        placeholder="Leave blank to keep current password"
-                        className="w-full p-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium mb-2">Role</label>
-                      <Badge variant="secondary">{user.role}</Badge>
-                    </div>
-                    <Button className="w-full" onClick={handleUpdateProfile} disabled={updating}>
-                      {updating ? "Updating..." : "Update Profile"}
-                    </Button>
-                  </CardContent>
-                </Card>
-              </TabsContent>
-            </Tabs>
-          </div>
-        </div>
-      </div>
+        {activeTab === "settings" && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Account Settings</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-2">Display Name</label>
+                <input
+                  type="text"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  className="w-full p-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-2">Email</label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full p-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-2">New Password</label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Leave blank to keep current password"
+                  className="w-full p-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
+                />
+              </div>
+              <Button className="w-full" onClick={handleUpdateProfile} disabled={updating}>
+                {updating ? "Updating..." : "Update Profile"}
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+      </main>
     </div>
   )
 }
